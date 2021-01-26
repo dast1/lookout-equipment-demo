@@ -11,9 +11,9 @@ import uuid
 from botocore.config import Config
 from matplotlib.dates import DateFormatter
 from matplotlib import gridspec
+from scipy.stats import wasserstein_distance
 from typing import List, Dict
 from tqdm import tqdm
-
 
 # Parameters
 DEFAULT_REGION = 'eu-west-1'
@@ -379,8 +379,8 @@ def plot_timeseries(timeseries_df, tag_name,
         label_data.loc[:, 'Label'] = 0.0
 
         for index, row in labels_df.iterrows():
-            event_start = row['Start']
-            event_end = row['End']
+            event_start = row['start']
+            event_end = row['end']
             label_data.loc[event_start:event_end, 'Label'] = 1.0
             
         ax[ax_id].plot(label_data['Label'], color='tab:green', linewidth=0.5)
@@ -441,3 +441,180 @@ def plot_timeseries(timeseries_df, tag_name,
     ax[0].legend(fontsize=10, loc='upper right', framealpha=0.4)
         
     return fig, ax
+
+class LookoutEquipmentAnalysis:
+    def __init__(self, model_name, tags_df):
+        self.lookout_client = get_client()
+        self.model_name = model_name
+        self.predicted_ranges = None
+        self.labelled_ranges = None
+        
+        self.df_list = dict()
+        for signal in tags_df.columns:
+            self.df_list.update({signal: tags_df[[signal]]})
+        
+    def _load_model_response(self):
+        describe_model_response = self.lookout_client.describe_model(ModelName=self.model_name)
+        
+        self.labelled_ranges = eval(describe_model_response['ModelMetrics'])['labeled_ranges']
+        self.predicted_ranges = eval(describe_model_response['ModelMetrics'])['predicted_ranges']
+
+        self.labelled_ranges = pd.DataFrame(self.labelled_ranges)
+        self.labelled_ranges['start'] = pd.to_datetime(self.labelled_ranges['start'])
+        self.labelled_ranges['end'] = pd.to_datetime(self.labelled_ranges['end'])
+
+        self.predicted_ranges = pd.DataFrame(self.predicted_ranges)
+        self.predicted_ranges['start'] = pd.to_datetime(self.predicted_ranges['start'])
+        self.predicted_ranges['end'] = pd.to_datetime(self.predicted_ranges['end'])
+        
+    def set_time_periods(self, evaluation_start, evaluation_end, training_start, training_end):
+        self.evaluation_start = evaluation_start
+        self.evaluation_end = evaluation_end
+        self.training_start = training_start
+        self.training_end = training_end
+    
+    def get_predictions(self):
+        if self.predicted_ranges is None:
+            self._load_model_response()
+            
+        return self.predicted_ranges
+        
+    def get_labels(self):
+        if self.labelled_ranges is None:
+            self._load_model_response()
+            
+        return self.labelled_ranges
+    
+    def _get_time_ranges(self):
+        tag = list(self.df_list.keys())[0]
+        tag_df = self.df_list[tag]
+        
+        predictions_df = pd.DataFrame(columns=['Prediction'], index=tag_df.index)
+        predictions_df['Prediction'] = 0
+
+        for index, row in self.predicted_ranges.iterrows():
+            predictions_df.loc[row['start']:row['end'], 'Prediction'] = 1
+
+        predictions_df = predictions_df[self.evaluation_start:self.evaluation_end]
+        index_normal = predictions_df[predictions_df['Prediction'] == 0].index
+        index_anomaly = predictions_df[predictions_df['Prediction'] == 1].index
+        
+        return index_normal, index_anomaly
+    
+    def compute_histograms(self, index_normal=None, index_anomaly=None, num_bins=20):
+        if (index_normal is None) or (index_anomaly is None):
+            self.ts_normal_training, self.ts_label_evaluation = self._get_time_ranges()
+
+        self.num_bins = num_bins
+
+        # Now we loop on each signal to compute a 
+        # histogram of each of them in this anomaly range,
+        # compte another one in the normal range and
+        # compute a distance between these:
+        rank = dict()
+        for tag, current_tag_df in tqdm(self.df_list.items(), desc='Computing distributions'):
+            try:
+                # Get the values for the whole signal, parts
+                # marked as anomalies and normal part:
+                current_signal_values = current_tag_df[tag]
+                current_signal_evaluation = current_tag_df.loc[self.ts_label_evaluation, tag]
+                current_signal_training = current_tag_df.loc[self.ts_normal_training, tag]
+
+                # Let's compute a bin width based on the whole range of possible 
+                # values for this signal (across the normal and anomalous periods).
+                # For both normalization and aesthetic reasons, we want the same
+                # number of bins across all signals:
+                bin_width = (np.max(current_signal_values) - np.min(current_signal_values))/self.num_bins
+                bins = np.arange(np.min(current_signal_values), np.max(current_signal_values) + bin_width, bin_width)
+
+                # We now use the same bins arrangement for both parts of the signal:
+                u = np.histogram(current_signal_training, bins=bins, density=True)[0]
+                v = np.histogram(current_signal_evaluation, bins=bins, density=True)[0]
+
+                # Wasserstein distance is the earth mover distance: it can be 
+                # used to compute a similarity between two distributions: this
+                # metric is only valid when the histograms are normalized (hence
+                # the density=True in the computation above):
+                d = wasserstein_distance(u, v)
+                rank.update({tag: d})
+
+            except Exception as e:
+                rank.update({tag: 0.0})
+
+        # Sort histograms by decreasing Wasserstein distance:
+        rank = {k: v for k, v in sorted(rank.items(), key=lambda rank: rank[1], reverse=True)}
+        self.rank = rank
+        
+    def plot_histograms(self, nb_cols=3, max_plots=12):
+        # Prepare the figure:
+        nb_rows = len(self.df_list.keys()) // nb_cols + 1
+        plt.style.use('Solarize_Light2')
+        prop_cycle = plt.rcParams['axes.prop_cycle']
+        colors = prop_cycle.by_key()['color']
+        fig = plt.figure(figsize=(16, int(nb_rows * 3)))
+        gs = gridspec.GridSpec(nb_rows, nb_cols, hspace=0.5, wspace=0.25)
+
+        i = 0
+        for tag, current_rank in tqdm(self.rank.items(), total=max_plots, desc='Preparing histograms'):
+            if i > max_plots - 1:
+                break
+
+            try:
+                current_signal_values = self.df_list[tag][tag]
+                current_signal_evaluation = self.df_list[tag].loc[self.ts_label_evaluation, tag]
+                current_signal_training = self.df_list[tag].loc[self.ts_normal_training, tag]
+
+                bin_width =(np.max(current_signal_values) - np.min(current_signal_values))/self.num_bins
+                bins = np.arange(np.min(current_signal_values), np.max(current_signal_values) + bin_width, bin_width)
+
+                ax1 = plt.subplot(gs[i])
+                ax1.hist(current_signal_training, density=True, alpha=0.5, color=colors[1], bins=bins, edgecolor='#FFFFFF')
+                ax1.hist(current_signal_evaluation, alpha=0.5, density=True, color=colors[5], bins=bins, edgecolor='#FFFFFF')
+
+            except Exception as e:
+                print(e)
+                ax1 = plt.subplot(gs[i])
+
+            ax1.grid(False)
+            ax1.get_yaxis().set_visible(False)
+            ax1.get_xaxis().set_visible(False)
+
+            title = tag
+            title += f' (score: {current_rank:.02f})'
+                
+            plt.title(title, fontsize=10)
+
+            i+= 1
+            
+    def plot_signals(self, nb_cols=3, max_plots=12):
+        nb_rows = max_plots // nb_cols + 1
+        plt.style.use('Solarize_Light2')
+        prop_cycle = plt.rcParams['axes.prop_cycle']
+        colors = prop_cycle.by_key()['color']
+        fig = plt.figure(figsize=(28, int(nb_rows * 4)))
+        gs = gridspec.GridSpec(nb_rows, nb_cols, hspace=0.5, wspace=0.25)
+        i = 0
+
+        for tag, current_rank in self.rank.items():
+            if i > max_plots - 1:
+                break
+
+            current_signal_evaluation = self.df_list[tag].loc[self.ts_label_evaluation, tag]
+            current_signal_training = self.df_list[tag].loc[self.ts_normal_training, tag]
+
+            ax1 = plt.subplot(gs[i])
+            ax1.plot(current_signal_training, linewidth=0.5, alpha=0.8, color=colors[1])
+            ax1.plot(current_signal_evaluation, linewidth=0.5, alpha=0.8, color=colors[5])
+
+            title = tag
+            title += f' (score: {current_rank:.01f})'
+                
+            plt.title(title, fontsize=10)
+
+            i += 1
+            
+    def get_ranked_list(self, max_signals=12):
+        significant_signals_df = pd.DataFrame(list(self.rank.items())[:max_signals])
+        significant_signals_df.columns = ['Tag', 'Rank']
+        
+        return significant_signals_df
