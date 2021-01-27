@@ -6,6 +6,7 @@ import numpy as np
 import os
 import pandas as pd
 import pprint
+import time
 import uuid
 
 from botocore.config import Config
@@ -618,3 +619,197 @@ class LookoutEquipmentAnalysis:
         significant_signals_df.columns = ['Tag', 'Rank']
         
         return significant_signals_df
+    
+class LookoutEquipmentScheduler:
+    def __init__(self, scheduler_name, model_name):
+        self.scheduler_name = scheduler_name
+        self.model_name = model_name
+        self.lookout_client = get_client()
+        
+        self.input_bucket = None
+        self.input_prefix = None
+        self.output_bucket = None
+        self.output_prefix = None
+        self.role_arn = None
+        self.upload_frequency = None
+        self.delay_offset = None
+        self.timezone_offset = None
+        self.component_delimiter = None
+        self.timestamp_format = None
+        self.execution_summaries = None
+        
+    def set_parameters(self,
+                       input_bucket,
+                       input_prefix,
+                       output_bucket,
+                       output_prefix,
+                       role_arn,
+                       upload_frequency='PT5M',
+                       delay_offset=None,
+                       timezone_offset='+00:00',
+                       component_delimiter='_',
+                       timestamp_format='yyyyMMddHHmmss'
+                      ):
+        self.input_bucket = input_bucket
+        self.input_prefix = input_prefix
+        self.output_bucket = output_bucket
+        self.output_prefix = output_prefix
+        self.role_arn = role_arn
+        self.upload_frequency = upload_frequency
+        self.delay_offset = delay_offset
+        self.timezone_offset = timezone_offset
+        self.component_delimiter = component_delimiter
+        self.timestamp_format = timestamp_format
+
+    def create(self):
+        client_token = uuid.uuid4().hex
+
+        create_inference_scheduler_request = {
+            'ModelName': self.model_name,
+            'InferenceSchedulerName': self.scheduler_name,
+            'DataUploadFrequency': self.upload_frequency,
+            'RoleArn': self.role_arn,
+            'ClientToken': client_token,
+        }
+
+        if self.delay_offset is not None:
+            create_inference_scheduler_request['DataDelayOffsetInMinutes'] = self.delay_offset
+
+        # Setup data input configuration
+        inference_input_config = dict()
+        inference_input_config['S3InputConfiguration'] = dict([
+            ('Bucket', self.input_bucket),
+            ('Prefix', self.input_prefix)
+        ])
+        if self.timezone_offset is not None:
+            inference_input_config['InputTimeZoneOffset'] = self.timezone_offset
+        if self.component_delimiter is not None or self.timestamp_format is not None:
+            inference_input_name_configuration = dict()
+            if self.component_delimiter is not None:
+                inference_input_name_configuration['ComponentTimestampDelimiter'] = self.component_delimiter
+            if self.timestamp_format is not None:
+                inference_input_name_configuration['TimestampFormat'] = self.timestamp_format
+            inference_input_config['InferenceInputNameConfiguration'] = inference_input_name_configuration   
+        create_inference_scheduler_request['DataInputConfiguration'] = inference_input_config
+
+        #  Set up output configuration
+        inference_output_configuration = dict()
+        inference_output_configuration['S3OutputConfiguration'] = dict([
+            ('Bucket', self.output_bucket),
+            ('Prefix', self.output_prefix)
+        ])
+        create_inference_scheduler_request['DataOutputConfiguration'] = inference_output_configuration
+        create_scheduler_response = self.lookout_client.create_inference_scheduler(**create_inference_scheduler_request)
+        
+        scheduler_status = create_scheduler_response['Status']
+        print("===== Polling Inference Scheduler Status =====\n")
+        print("Scheduler Status: " + scheduler_status)
+        while scheduler_status == 'PENDING':
+            time.sleep(5)
+            describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
+                InferenceSchedulerName=self.scheduler_name
+            )
+            scheduler_status = describe_scheduler_response['Status']
+            print("Scheduler Status: " + scheduler_status)
+        print("\n===== End of Polling Inference Scheduler Status =====")
+
+        return describe_scheduler_response
+    
+    def start(self):
+        start_scheduler_response = self.lookout_client.start_inference_scheduler(
+            InferenceSchedulerName=self.scheduler_name
+        )
+
+        # Wait until started:
+        scheduler_status = start_scheduler_response['Status']
+        print("===== Polling Inference Scheduler Status =====\n")
+        print("Scheduler Status: " + scheduler_status)
+        while scheduler_status == 'PENDING':
+            time.sleep(5)
+            describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
+                InferenceSchedulerName=self.scheduler_name
+            )
+            scheduler_status = describe_scheduler_response['Status']
+            print("Scheduler Status: " + scheduler_status)
+        print("\n===== End of Polling Inference Scheduler Status =====")
+        
+    def stop(self):
+        stop_scheduler_response = self.lookout_client.stop_inference_scheduler(
+            InferenceSchedulerName=self.scheduler_name
+        )
+
+        # Wait until stopped
+        scheduler_status = stop_scheduler_response['Status']
+        print("===== Polling Inference Scheduler Status =====\n")
+        print("Scheduler Status: " + scheduler_status)
+        while scheduler_status == 'STOPPING':
+            time.sleep(5)
+            describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
+                InferenceSchedulerName=self.scheduler_name
+            )
+            scheduler_status = describe_scheduler_response['Status']
+            print("Scheduler Status: " + scheduler_status)
+        print("\n===== End of Polling Inference Scheduler Status =====")
+        
+    def delete(self):
+        if self.get_status() == 'STOPPED':
+            delete_scheduler_response = self.lookout_client.delete_inference_scheduler(
+                InferenceSchedulerName=self.scheduler_name
+            )
+            
+        else:
+            raise Exception('Scheduler must be stopped to be deleted.')
+        
+        return delete_scheduler_response
+    
+    def get_status(self):
+        describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
+            InferenceSchedulerName=self.scheduler_name
+        )
+        status = describe_scheduler_response['Status']
+        
+        return status
+    
+    def list_inference_executions(self, execution_status=None, start_time=None, end_time=None, max_results=50):
+        list_executions_request = {"MaxResults": max_results}
+
+        list_executions_request["InferenceSchedulerName"] = self.scheduler_name
+
+        if execution_status is not None:
+            list_executions_request["Status"] = execution_status
+        if start_time is not None:
+            list_executions_request['DataStartTimeAfter'] = start_time
+        if end_time is not None:
+            list_executions_request['DataEndTimeBefore'] = end_time
+
+        has_more_records = True
+        list_executions = []
+        while has_more_records:
+            list_executions_response = self.lookout_client.list_inference_executions(**list_executions_request)
+            if "NextToken" in list_executions_response:
+                list_executions_request["NextToken"] = list_executions_response["NextToken"]
+            else:
+                has_more_records = False
+
+            list_executions = list_executions + list_executions_response["InferenceExecutionSummaries"]
+
+        self.execution_summaries = list_executions
+        return list_executions
+    
+    def get_predictions(self):
+        if self.execution_summaries is None:
+            _ = self.list_inference_executions()
+            
+        results_df = []
+        for execution_summary in self.execution_summaries:
+            bucket = execution_summary['CustomerResultObject']['Bucket']
+            key = execution_summary['CustomerResultObject']['Key']
+            fname = f's3://{bucket}/{key}'
+            results_df.append(pd.read_csv(fname, header=None))
+
+        results_df = pd.concat(results_df, axis='index')
+        results_df.columns = ['Timestamp', 'Predictions']
+        results_df['Timestamp'] = pd.to_datetime(results_df['Timestamp'])
+        results_df = results_df.set_index('Timestamp')
+        
+        return results_df
