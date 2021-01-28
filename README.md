@@ -7,9 +7,9 @@ Amazon Lookout for Equipment uses the data from your sensors to detect abnormal 
 Amazon Lookout for Equipment analyzes the data from your sensors, such as pressure, flow rate, RPMs, temperature, and power to automatically train a specific ML model based on just your data, for your equipment – with no ML expertise required. Lookout for Equipment uses your unique ML model to analyze incoming sensor data in real-time and accurately identify early warning signs that could lead to machine failures. This means you can detect equipment abnormalities with speed and precision, quickly diagnose issues, take action to reduce expensive downtime, and reduce false alerts.
 
 ### Installation instructions
-[**Create an AWS account**](https://portal.aws.amazon.com/gp/aws/developer/registration/index.html) if you do not already have one and login.
+[**Create an AWS account**](https://portal.aws.amazon.com/gp/aws/developer/registration/index.html) if you do not already have one. This service is actually in Preview: to run this demo, your AWS account will need to be on the allow list. To sign up for the preview, you can follow [**this link**](https://pages.awscloud.com/Amazon-Lookout-for-Equipment-Preview.html).
 
-Navigate to the SageMaker console and create a new instance. Using an **ml.m5.xlarge instance** with a **5 GB attached EBS volume** is recommended to process the dataset comfortably. To enable exploration of big timeseries dataset, you might need to increase the EBS volume size. Some plots can take up a significant amount of memory: in such exploration, it's not unusual to move to bigger memory optimized instance (like the **ml.m5.4xlarge** one).
+Once you have access to the service, login to your AWS account and navigate to the SageMaker console and create a new instance. Using an **ml.m5.xlarge instance** with the standard 5 GB attached EBS volume is recommended to process and visualize the dataset comfortably. To enable exploration of big timeseries dataset, you might need to increase the EBS volume size. Some plots can take up a significant amount of memory: in such exploration, it's not unusual to move to bigger memory optimized instance (like the **ml.m5.4xlarge** one).
 
 You need to ensure that this notebook instance has an **IAM role** which allows it to call the Amazon Lookout for Equipment APIs:
 
@@ -70,16 +70,16 @@ Once you've cloned this repo, browse to the [**data preparation**](notebooks/1_d
 +-- dataset/                           <-- Raw dataset files are located here
 |   |-- labels.csv                         | Known anomaly ranges
 |   |-- tags_description.csv               | Description of each time serie signal
-|   |-- tags_list.txt                      | List of valid signal to include in the modeling
 |   |-- timeranges.txt                     | Train / evaluation split
 |   \-- timeseries.zip                     | Raw timeseries
 |
 +-- notebooks/
 |   |-- 1_data_preparation.ipynb       <-- START HERE: data preparation notebook, useful to
-|                                          download and prepare the data, get familiar with
-|                                          them
+|   |                                      download and prepare the data, get familiar with
+|   |                                      them
+|   |
 |   |-- 2_dataset_creation.ipynb       <-- Create a Lookout for Equipment dataset
-|   |-- 3_model_training.ipynb         <-- Train a model
+|   |-- 3_model_training.ipynb         <-- Train a Lookout for Equipment model
 |   |-- 4_model_evaluation.ipynb       <-- Plot the evaluation results and some diagnostics
 |   \-- 5_inference_scheduling.ipynb   <-- Schedule a regular inference execution
 |
