@@ -34,7 +34,7 @@ You need to ensure that this notebook instance has an **IAM role** which allows 
 }
 ```
 3. Click on `Review policy` and name it (e.g. **LookoutEquipmentAccess**) before clicking on `Create policy`
-4. Browse to the `Trust relationship` tab for this role, click on the `Edit trust relationship` button and fill in the following policy. You may already have a trust relationship in place for this role, in this case, just add the **"thorbrain.amazonaws.com"** in the service list:
+4. Browse to the `Trust relationship` tab for this role, click on the `Edit trust relationship` button and fill in the following policy. You may already have a trust relationship in place for this role, in this case, just add the **"lookoutequipment.amazonaws.com"** in the service list:
 
 ```json
 {
@@ -45,7 +45,7 @@ You need to ensure that this notebook instance has an **IAM role** which allows 
       "Principal": {
         "Service": [
           "sagemaker.amazonaws.com",
-          "thorbrain.amazonaws.com"
+          "lookoutequipment.amazonaws.com"
         ]
       },
       "Action": "sts:AssumeRole"
