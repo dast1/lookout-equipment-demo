@@ -904,6 +904,10 @@ class LookoutEquipmentScheduler:
             Name of the model used to run the inference when the scheduler
             wakes up
             
+        create_request: dict
+            A dictionary containing all the parameters to configure and create
+            an inference scheduler
+            
         execution_summaries: list of dict
             A list of all inference execution results. Each execution is stored
             as a dictionary.
@@ -953,16 +957,20 @@ class LookoutEquipmentScheduler:
         self.model_name = model_name
         self.lookout_client = get_client(region_name)
         
-        self.input_bucket = None
-        self.input_prefix = None
-        self.output_bucket = None
-        self.output_prefix = None
-        self.role_arn = None
-        self.upload_frequency = None
-        self.delay_offset = None
-        self.timezone_offset = None
-        self.component_delimiter = None
-        self.timestamp_format = None
+        self.create_request = dict()
+        self.create_request.update({'ModelName': model_name})
+        self.create_request.update({'InferenceSchedulerName': scheduler_name})
+
+        # self.input_bucket = None
+        # self.input_prefix = None
+        # self.output_bucket = None
+        # self.output_prefix = None
+        # self.role_arn = None
+        # self.upload_frequency = None
+        # self.delay_offset = None
+        # self.timezone_offset = None
+        # self.component_delimiter = None
+        # self.timestamp_format = None
         self.execution_summaries = None
         
     def set_parameters(self,
@@ -977,62 +985,108 @@ class LookoutEquipmentScheduler:
                        component_delimiter='_',
                        timestamp_format='yyyyMMddHHmmss'
                       ):
-        self.input_bucket = input_bucket
-        self.input_prefix = input_prefix
-        self.output_bucket = output_bucket
-        self.output_prefix = output_prefix
-        self.role_arn = role_arn
-        self.upload_frequency = upload_frequency
-        self.delay_offset = delay_offset
-        self.timezone_offset = timezone_offset
-        self.component_delimiter = component_delimiter
-        self.timestamp_format = timestamp_format
+        """
+        Set all the attributes for the scheduler object.
+        
+        PARAMS
+        ======
+            input_bucket: string
+                Bucket when the input data are located
 
-    def create(self):
-        client_token = uuid.uuid4().hex
-
-        create_inference_scheduler_request = {
-            'ModelName': self.model_name,
-            'InferenceSchedulerName': self.scheduler_name,
-            'DataUploadFrequency': self.upload_frequency,
-            'RoleArn': self.role_arn,
-            'ClientToken': client_token,
-        }
-
-        if self.delay_offset is not None:
-            create_inference_scheduler_request['DataDelayOffsetInMinutes'] = self.delay_offset
-
-        # Setup data input configuration
+            input_prefix: string
+                Location prefix for the input data
+                
+            output_bucket: string
+                Bucket location for the inference execution output
+                
+            output_prefix: string
+                Location prefix for the inference result file
+                
+            role_arn: string
+                Role allowing Lookout for Equipment to read and write data
+                from the input and output bucket locations
+                
+            upload_frequency: string (default: PT5M)
+                Upload frequency of the data
+            
+            delay_offset: integer (default: None)
+                Offset in minute, ensuring the data are available when the
+                scheduler wakes up to run the inference
+            
+            timezone_offset: string (default: +00:00)
+                Timezone offset used to match the date in the input filenames
+            
+            component_delimiter: string (default: '_')
+                Character to use to delimit component name and timestamp in the
+                input filenames
+            
+            timestamp_format: string (default: yyyyMMddHHmmss)
+                Format of the timestamp to look for in the input filenames
+        """
+        # self.input_bucket = input_bucket
+        # self.input_prefix = input_prefix
+        # self.output_bucket = output_bucket
+        # self.output_prefix = output_prefix
+        # self.role_arn = role_arn
+        # self.upload_frequency = upload_frequency
+        # self.delay_offset = delay_offset
+        # self.timezone_offset = timezone_offset
+        # self.component_delimiter = component_delimiter
+        # self.timestamp_format = timestamp_format
+        
+        # Configure the mandatory parameters:
+        self.create_request.update({'DataUploadFrequency': upload_frequency})
+        self.create_request.update({'RoleArn': role_arn})
+        
+        # Configure the optional parameters:
+        if delay_offset is not None:
+            self.create_request.update({'DataDelayOffsetInMinutes': delay_offset})
+            
+        # Setup data input configuration:
         inference_input_config = dict()
         inference_input_config['S3InputConfiguration'] = dict([
-            ('Bucket', self.input_bucket),
-            ('Prefix', self.input_prefix)
+            ('Bucket', input_bucket),
+            ('Prefix', input_prefix)
         ])
-        if self.timezone_offset is not None:
-            inference_input_config['InputTimeZoneOffset'] = self.timezone_offset
-        if self.component_delimiter is not None or self.timestamp_format is not None:
+        if timezone_offset is not None:
+            inference_input_config['InputTimeZoneOffset'] = timezone_offset
+        if component_delimiter is not None or timestamp_format is not None:
             inference_input_name_configuration = dict()
-            if self.component_delimiter is not None:
-                inference_input_name_configuration['ComponentTimestampDelimiter'] = self.component_delimiter
-            if self.timestamp_format is not None:
-                inference_input_name_configuration['TimestampFormat'] = self.timestamp_format
-            inference_input_config['InferenceInputNameConfiguration'] = inference_input_name_configuration   
-        create_inference_scheduler_request['DataInputConfiguration'] = inference_input_config
+            if component_delimiter is not None:
+                inference_input_name_configuration['ComponentTimestampDelimiter'] = component_delimiter
+            if timestamp_format is not None:
+                inference_input_name_configuration['TimestampFormat'] = timestamp_format
+            inference_input_config['InferenceInputNameConfiguration'] = inference_input_name_configuration
+        self.create_request.update({'DataInputConfiguration': inference_input_config})
 
-        #  Set up output configuration
+        #  Set up output configuration:
         inference_output_configuration = dict()
         inference_output_configuration['S3OutputConfiguration'] = dict([
-            ('Bucket', self.output_bucket),
-            ('Prefix', self.output_prefix)
+            ('Bucket', output_bucket),
+            ('Prefix', output_prefix)
         ])
-        create_inference_scheduler_request['DataOutputConfiguration'] = inference_output_configuration
-        create_scheduler_response = self.lookout_client.create_inference_scheduler(**create_inference_scheduler_request)
+        self.create_request.update({'DataOutputConfiguration': inference_output_configuration})
         
-        scheduler_status = create_scheduler_response['Status']
+    def _poll_event(self, scheduler_status, wait_state, sleep_time=5):
+        """
+        Wait for a given scheduler update process to be finished
+        
+        PARAMS
+        ======
+            scheduler_status: string
+                Initial scheduler status
+            
+            wait_state: string (either PENDING, STOPPING)
+                The wait will continue while the status has a value equal
+                to this wait_state string
+                
+            sleep_time: integer (default: 5)
+                How many seconds should we wait before polling again
+        """
         print("===== Polling Inference Scheduler Status =====\n")
         print("Scheduler Status: " + scheduler_status)
-        while scheduler_status == 'PENDING':
-            time.sleep(5)
+        while scheduler_status == wait_state:
+            time.sleep(sleep_time)
             describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
                 InferenceSchedulerName=self.scheduler_name
             )
@@ -1040,7 +1094,70 @@ class LookoutEquipmentScheduler:
             print("Scheduler Status: " + scheduler_status)
         print("\n===== End of Polling Inference Scheduler Status =====")
 
-        return describe_scheduler_response
+    def create(self):
+        """
+        Create an inference scheduler for a trained Lookout for Equipment model
+        """
+        # Build the creation request:
+        # client_token = uuid.uuid4().hex
+        # create_inference_scheduler_request = {
+            # 'ModelName': self.model_name,
+            # 'InferenceSchedulerName': self.scheduler_name,
+            # 'DataUploadFrequency': self.upload_frequency,
+            # 'RoleArn': self.role_arn,
+            # 'ClientToken': client_token,
+        # }
+        
+        self.create_request.update({'ClientToken': uuid.uuid4().hex})
+        
+        # # Add optional parameters to the creation request:
+        # if self.delay_offset is not None:
+        #     create_inference_scheduler_request['DataDelayOffsetInMinutes'] = self.delay_offset
+
+        # Setup data input configuration
+        # inference_input_config = dict()
+        # inference_input_config['S3InputConfiguration'] = dict([
+        #     ('Bucket', self.input_bucket),
+        #     ('Prefix', self.input_prefix)
+        # ])
+        # if self.timezone_offset is not None:
+        #     inference_input_config['InputTimeZoneOffset'] = self.timezone_offset
+        # if self.component_delimiter is not None or self.timestamp_format is not None:
+        #     inference_input_name_configuration = dict()
+        #     if self.component_delimiter is not None:
+        #         inference_input_name_configuration['ComponentTimestampDelimiter'] = self.component_delimiter
+        #     if self.timestamp_format is not None:
+        #         inference_input_name_configuration['TimestampFormat'] = self.timestamp_format
+        #     inference_input_config['InferenceInputNameConfiguration'] = inference_input_name_configuration
+            
+        #  Set up output configuration
+        # inference_output_configuration = dict()
+        # inference_output_configuration['S3OutputConfiguration'] = dict([
+        #     ('Bucket', self.output_bucket),
+        #     ('Prefix', self.output_prefix)
+        # ])
+            
+        # # Adds the input and output configurations to the scheduler creation request:
+        # create_inference_scheduler_request['DataInputConfiguration'] = inference_input_config
+        # create_inference_scheduler_request['DataOutputConfiguration'] = inference_output_configuration
+        
+        # Create the scheduler:
+        create_scheduler_response = self.lookout_client.create_inference_scheduler(**self.create_request)
+        
+        # Polling scheduler creation status:
+        self._poll_event(create_scheduler_response['Status'], 'PENDING')
+        
+        # scheduler_status = create_scheduler_response['Status']
+        # print("===== Polling Inference Scheduler Status =====\n")
+        # print("Scheduler Status: " + scheduler_status)
+        # while scheduler_status == 'PENDING':
+        #     time.sleep(5)
+        #     describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
+        #         InferenceSchedulerName=self.scheduler_name
+        #     )
+        #     scheduler_status = describe_scheduler_response['Status']
+        #     print("Scheduler Status: " + scheduler_status)
+        # print("\n===== End of Polling Inference Scheduler Status =====")
     
     def start(self):
         start_scheduler_response = self.lookout_client.start_inference_scheduler(
@@ -1048,37 +1165,49 @@ class LookoutEquipmentScheduler:
         )
 
         # Wait until started:
-        scheduler_status = start_scheduler_response['Status']
-        print("===== Polling Inference Scheduler Status =====\n")
-        print("Scheduler Status: " + scheduler_status)
-        while scheduler_status == 'PENDING':
-            time.sleep(5)
-            describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
-                InferenceSchedulerName=self.scheduler_name
-            )
-            scheduler_status = describe_scheduler_response['Status']
-            print("Scheduler Status: " + scheduler_status)
-        print("\n===== End of Polling Inference Scheduler Status =====")
+        self._poll_event(start_scheduler_response['Status'], 'PENDING')
+        
+        # scheduler_status = start_scheduler_response['Status']
+        # print("===== Polling Inference Scheduler Status =====\n")
+        # print("Scheduler Status: " + scheduler_status)
+        # while scheduler_status == 'PENDING':
+        #     time.sleep(5)
+        #     describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
+        #         InferenceSchedulerName=self.scheduler_name
+        #     )
+        #     scheduler_status = describe_scheduler_response['Status']
+        #     print("Scheduler Status: " + scheduler_status)
+        # print("\n===== End of Polling Inference Scheduler Status =====")
         
     def stop(self):
         stop_scheduler_response = self.lookout_client.stop_inference_scheduler(
             InferenceSchedulerName=self.scheduler_name
         )
 
-        # Wait until stopped
-        scheduler_status = stop_scheduler_response['Status']
-        print("===== Polling Inference Scheduler Status =====\n")
-        print("Scheduler Status: " + scheduler_status)
-        while scheduler_status == 'STOPPING':
-            time.sleep(5)
-            describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
-                InferenceSchedulerName=self.scheduler_name
-            )
-            scheduler_status = describe_scheduler_response['Status']
-            print("Scheduler Status: " + scheduler_status)
-        print("\n===== End of Polling Inference Scheduler Status =====")
+        # Wait until stopped:
+        self._poll_event(stop_scheduler_response['Status'], 'STOPPING')
+        
+        # scheduler_status = stop_scheduler_response['Status']
+        # print("===== Polling Inference Scheduler Status =====\n")
+        # print("Scheduler Status: " + scheduler_status)
+        # while scheduler_status == 'STOPPING':
+        #     time.sleep(5)
+        #     describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
+        #         InferenceSchedulerName=self.scheduler_name
+        #     )
+        #     scheduler_status = describe_scheduler_response['Status']
+        #     print("Scheduler Status: " + scheduler_status)
+        # print("\n===== End of Polling Inference Scheduler Status =====")
         
     def delete(self):
+        """
+        Delete the current inference scheduler
+        
+        RETURNS
+        =======
+            delete_scheduler_response: dict
+                A JSON dictionary with the response from the delete request API
+        """
         if self.get_status() == 'STOPPED':
             delete_scheduler_response = self.lookout_client.delete_inference_scheduler(
                 InferenceSchedulerName=self.scheduler_name
@@ -1090,6 +1219,15 @@ class LookoutEquipmentScheduler:
         return delete_scheduler_response
     
     def get_status(self):
+        """
+        Get current status of the inference scheduler
+        
+        RETURNS
+        =======
+            status: string
+                The status of the inference scheduler, as extracted from the
+                DescribeInferenceScheduler API
+        """
         describe_scheduler_response = self.lookout_client.describe_inference_scheduler(
             InferenceSchedulerName=self.scheduler_name
         )
