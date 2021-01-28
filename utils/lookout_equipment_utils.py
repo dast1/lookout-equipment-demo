@@ -305,6 +305,66 @@ def plot_timeseries(timeseries_df, tag_name,
                     fig_width=18,
                     prediction_titles=None
                    ):
+    """
+    This function plots a time series signal with a line plot and can combine
+    this with labelled and predicted anomaly ranges.
+    
+    PARAMS
+    ======
+        timeseries_df: pandas.DataFrame
+            A dataframe containing the time series to plot
+        
+        tag_name: string
+            The name of the tag that we can add in the label
+        
+        start: string or pandas.Datetime (default: None)
+            Starting timestamp of the signal to plot. If not provided, will use
+            the whole signal
+        
+        end: string or pandas.Datetime (default: None)
+            End timestamp of the signal to plot. If not provided, will use the
+            whole signal
+        
+        plot_rolling_avg: boolean (default: False)
+            If set to true, will add a rolling average curve on top of the
+            line plot for the time series.
+        
+        labels_df: pandas.DataFrame (default: None)
+            If provided, this is a dataframe with all the labelled anomalies.
+            This will be rendered as a filled-in plots below the time series
+            itself.
+        
+        predictions: pandas.DataFrame or list of pandas.DataFrame
+            If provided, this is a dataframe with all the predicted anomalies.
+            This will be rendered as a filled-in plots below the time series
+            itself.
+            
+        tag_split: string or pandas.Datetime
+            If provided, the line plot will plot the first part of the time
+            series with a colour and the second part in grey. This can be
+            used to show the split between training and evaluation period for
+            instance.
+        
+        custom_grid: boolean (default: True)
+            Will show a custom grid with month name mentionned for each quarter
+            and lighter lines for the other month to prevent clutter on the
+            horizontal axis.
+        
+        fig_width: integer (default: 18)
+            Figure width.
+        
+        prediction_titles: list of strings (default: None)
+            If we want to plot multiple predictions, we can set the titles for
+            each of the prediction plot.
+    
+    RETURNS
+    =======
+        fig: matplotlib.pyplot.figure
+            A figure where the plots are drawn
+            
+        ax: matplotlib.pyplot.Axis
+            An axis where the plots are drawn
+    """
     if start is None:
         start = timeseries_df.index.min()
     elif type(start) == str:
@@ -444,7 +504,67 @@ def plot_timeseries(timeseries_df, tag_name,
     return fig, ax
 
 class LookoutEquipmentAnalysis:
+    """
+    A class to manage Lookout for Equipment result analysis
+    
+    ATTRIBUTES
+    ==========
+        model_name: string
+            The name of the Lookout for Equipment trained model
+                
+        predicted_ranges: pandas.DataFrame
+            A Pandas dataframe with the predicted anomaly ranges listed in
+            chronological order with a Start and End columns
+
+        labelled_ranges: pandas.DataFrame
+            A Pandas dataframe with the labelled anomaly ranges listed in
+            chronological order with a Start and End columns
+
+        df_list: list of pandas.DataFrame
+            A list with each time series into a dataframe
+
+    METHODS
+    =======
+        set_time_periods():
+            Sets the time period used for the analysis of the model evaluations
+            
+        get_predictions():
+            Get the anomaly ranges predicted by the current model
+            
+        get_labels():
+            Get the labelled ranges as provided to the model before training
+            
+        compute_histograms():
+            This method loops through each signal and computes two distributions
+            of the values in the time series: one for all the anomalies found in
+            the evaluation period and another one with all the normal values 
+            found in the same period. It then ranks every signals based on the
+            distance between these two histograms
+
+        plot_histograms():
+            Plot the top 12 signal values distribution by decreasing ranking 
+            distance (as computed by the compute_histograms() method
+            
+        plot_signals():
+            Plot the top 12 signals by decreasing ranking distance. For each 
+            signal, this method will plot the normal values in green and the 
+            anomalies in red
+
+        get_ranked_list():
+            Returns the list of signals with computed rank
+    """
     def __init__(self, model_name, tags_df):
+        """
+        Create a new analysis for a Lookout for Equipment model.
+        
+        PARAMS
+        ======
+            model_name: string
+                The name of the Lookout for Equipment trained model
+                
+            tags_df: pandas.DataFrame
+                A dataframe containing all the signals, indexed by time
+        """
         self.lookout_client = get_client()
         self.model_name = model_name
         self.predicted_ranges = None
@@ -455,6 +575,12 @@ class LookoutEquipmentAnalysis:
             self.df_list.update({signal: tags_df[[signal]]})
         
     def _load_model_response(self):
+        """
+        Use the trained model description to extract labelled and predicted 
+        ranges of anomalies. This method will extract them from the 
+        DescribeModel API from Lookout for Equipment and store them in the
+        labelled_ranges and predicted_ranges properties.
+        """
         describe_model_response = self.lookout_client.describe_model(ModelName=self.model_name)
         
         self.labelled_ranges = eval(describe_model_response['ModelMetrics'])['labeled_ranges']
@@ -468,41 +594,120 @@ class LookoutEquipmentAnalysis:
         self.predicted_ranges['start'] = pd.to_datetime(self.predicted_ranges['start'])
         self.predicted_ranges['end'] = pd.to_datetime(self.predicted_ranges['end'])
         
-    def set_time_periods(self, evaluation_start, evaluation_end, training_start, training_end):
+    def set_time_periods(self, 
+                         evaluation_start, 
+                         evaluation_end, 
+                         training_start, 
+                         training_end):
+        """
+        Set the time period of analysis
+        
+        PARAMS
+        ======
+            evaluation_start: datetime
+                Start of the evaluation period
+
+            evaluation_end: datetime
+                End of the evaluation period
+
+            training_start: datetime
+                Start of the training period
+
+            training_end: datetime
+                End of the training period
+        """
         self.evaluation_start = evaluation_start
         self.evaluation_end = evaluation_end
         self.training_start = training_start
         self.training_end = training_end
     
     def get_predictions(self):
+        """
+        Get the anomaly ranges predicted by the current model
+        
+        RETURN
+        ======
+            predicted_ranges: pandas.DataFrame
+                A Pandas dataframe with the predicted anomaly ranges listed in
+                chronological order with a Start and End columns
+        """
         if self.predicted_ranges is None:
             self._load_model_response()
             
         return self.predicted_ranges
         
     def get_labels(self):
+        """
+        Get the labelled ranges as provided to the model before training
+        
+        RETURN
+        ======
+            labelled_ranges: pandas.DataFrame
+                A Pandas dataframe with the labelled anomaly ranges listed in
+                chronological order with a Start and End columns
+        """        
         if self.labelled_ranges is None:
             self._load_model_response()
             
         return self.labelled_ranges
     
     def _get_time_ranges(self):
+        """
+        Extract DateTimeIndex with normal values and anomalies from the
+        predictions generated by the model.
+        
+        RETURNS
+        =======
+            index_normal: pandas.DateTimeIndex
+                Timestamp index for all normal values
+                
+            index_anomaly: pandas.DateTimeIndex
+                Timestamp index for all normal values
+        """
+        # Extract the first time series 
         tag = list(self.df_list.keys())[0]
         tag_df = self.df_list[tag]
         
+        # Initialize the predictions dataframe:
         predictions_df = pd.DataFrame(columns=['Prediction'], index=tag_df.index)
         predictions_df['Prediction'] = 0
 
+        # Loops through the predicted anomaly 
+        # ranges and set these predictions to 1:
         for index, row in self.predicted_ranges.iterrows():
             predictions_df.loc[row['start']:row['end'], 'Prediction'] = 1
 
+        # Limits the analysis range to the evaluation period:
         predictions_df = predictions_df[self.evaluation_start:self.evaluation_end]
+        
+        # Build a DateTimeIndex for normal values and anomalies:
         index_normal = predictions_df[predictions_df['Prediction'] == 0].index
         index_anomaly = predictions_df[predictions_df['Prediction'] == 1].index
         
         return index_normal, index_anomaly
     
     def compute_histograms(self, index_normal=None, index_anomaly=None, num_bins=20):
+        """
+        This method loops through each signal and computes two distributions of
+        the values in the time series: one for all the anomalies found in the
+        evaluation period and another one with all the normal values found in the
+        same period. It then computes the Wasserstein distance between these two
+        histograms and then rank every signals based on this distance. The higher
+        the distance, the more different a signal is when comparing anomalous
+        and normal periods. This can orient the investigation of a subject 
+        matter expert towards the sensors and associated components.
+        
+        PARAMS
+        ======
+            index_normal: pandas.DateTimeIndex
+                All the normal indices
+                
+            index_anomaly: pandas.DateTimeIndex
+                All the indices for anomalies
+                
+            num_bins: integer (default: 20)
+                Number of bins to use to build the distributions
+        """
         if (index_normal is None) or (index_anomaly is None):
             self.ts_normal_training, self.ts_label_evaluation = self._get_time_ranges()
 
@@ -547,6 +752,19 @@ class LookoutEquipmentAnalysis:
         self.rank = rank
         
     def plot_histograms(self, nb_cols=3, max_plots=12):
+        """
+        Once the histograms are computed, we can plot the top N by decreasing 
+        ranking distance. By default, this will plot the histograms for the top
+        12 signals, with 3 plots per line.
+        
+        PARAMS
+        ======
+            nb_cols: integer (default: 3)
+                Number of plots to assemble on a given row
+                
+            max_plots: integer (default: 12)
+                Number of signal to consider
+        """
         # Prepare the figure:
         nb_rows = len(self.df_list.keys()) // nb_cols + 1
         plt.style.use('Solarize_Light2')
@@ -555,58 +773,95 @@ class LookoutEquipmentAnalysis:
         fig = plt.figure(figsize=(16, int(nb_rows * 3)))
         gs = gridspec.GridSpec(nb_rows, nb_cols, hspace=0.5, wspace=0.25)
 
+        # Loops through each signal by decreasing distance order:
         i = 0
         for tag, current_rank in tqdm(self.rank.items(), total=max_plots, desc='Preparing histograms'):
+            # We stop after reaching the number of plots we are interested in:
             if i > max_plots - 1:
                 break
 
             try:
+                # Get the anomaly and the normal values from the current signal:
                 current_signal_values = self.df_list[tag][tag]
                 current_signal_evaluation = self.df_list[tag].loc[self.ts_label_evaluation, tag]
                 current_signal_training = self.df_list[tag].loc[self.ts_normal_training, tag]
 
+                # Compute the bin width and bin edges to match the 
+                # number of bins we want to have on each histogram:
                 bin_width =(np.max(current_signal_values) - np.min(current_signal_values))/self.num_bins
                 bins = np.arange(np.min(current_signal_values), np.max(current_signal_values) + bin_width, bin_width)
 
+                # Add both histograms in the same plot:
                 ax1 = plt.subplot(gs[i])
-                ax1.hist(current_signal_training, density=True, alpha=0.5, color=colors[1], bins=bins, edgecolor='#FFFFFF')
-                ax1.hist(current_signal_evaluation, alpha=0.5, density=True, color=colors[5], bins=bins, edgecolor='#FFFFFF')
+                ax1.hist(current_signal_training, 
+                         density=True, 
+                         alpha=0.5, 
+                         color=colors[1], 
+                         bins=bins, 
+                         edgecolor='#FFFFFF')
+                ax1.hist(current_signal_evaluation, 
+                         alpha=0.5, 
+                         density=True, 
+                         color=colors[5], 
+                         bins=bins, 
+                         edgecolor='#FFFFFF')
 
             except Exception as e:
                 print(e)
                 ax1 = plt.subplot(gs[i])
 
+            # Removes all the decoration to leave only the histograms:
             ax1.grid(False)
             ax1.get_yaxis().set_visible(False)
             ax1.get_xaxis().set_visible(False)
 
+            # Title will be the tag name followed by the score:
             title = tag
             title += f' (score: {current_rank:.02f})'
-                
             plt.title(title, fontsize=10)
 
             i+= 1
             
     def plot_signals(self, nb_cols=3, max_plots=12):
+        """
+        Once the histograms are computed, we can plot the top N signals by 
+        decreasing ranking distance. By default, this will plot the signals for 
+        the top 12 signals, with 3 plots per line. For each signal, this method
+        will plot the normal values in green and the anomalies in red.
+        
+        PARAMS
+        ======
+            nb_cols: integer (default: 3)
+                Number of plots to assemble on a given row
+                
+            max_plots: integer (default: 12)
+                Number of signal to consider
+        """
+        # Prepare the figure:
         nb_rows = max_plots // nb_cols + 1
         plt.style.use('Solarize_Light2')
         prop_cycle = plt.rcParams['axes.prop_cycle']
         colors = prop_cycle.by_key()['color']
         fig = plt.figure(figsize=(28, int(nb_rows * 4)))
         gs = gridspec.GridSpec(nb_rows, nb_cols, hspace=0.5, wspace=0.25)
+        
+        # Loops through each signal by decreasing distance order:
         i = 0
-
         for tag, current_rank in self.rank.items():
+            # We stop after reaching the number of plots we are interested in:
             if i > max_plots - 1:
                 break
 
+            # Get the anomaly and the normal values from the current signal:
             current_signal_evaluation = self.df_list[tag].loc[self.ts_label_evaluation, tag]
             current_signal_training = self.df_list[tag].loc[self.ts_normal_training, tag]
 
+            # Plot both time series with a line plot
             ax1 = plt.subplot(gs[i])
             ax1.plot(current_signal_training, linewidth=0.5, alpha=0.8, color=colors[1])
             ax1.plot(current_signal_evaluation, linewidth=0.5, alpha=0.8, color=colors[5])
 
+            # Title will be the tag name followed by the score:
             title = tag
             title += f' (score: {current_rank:.01f})'
                 
@@ -615,13 +870,79 @@ class LookoutEquipmentAnalysis:
             i += 1
             
     def get_ranked_list(self, max_signals=12):
+        """
+        Returns the list of signals with computed rank.
+        
+        PARAMS
+        ======
+            max_signals: integer (default: 12)
+                Number of signals to consider
+        
+        RETURNS
+        =======
+            significant_signals_df: pandas.DataFrame
+                A dataframe with each signal and the associated rank value
+        """
         significant_signals_df = pd.DataFrame(list(self.rank.items())[:max_signals])
         significant_signals_df.columns = ['Tag', 'Rank']
         
         return significant_signals_df
     
 class LookoutEquipmentScheduler:
+    """
+    A class to represent a Lookout for Equipment inference scheduler object.
+    
+    ATTRIBUTES
+    ==========
+        scheduler_name: string
+            Name of the scheduler associated to this object
+            
+        model_name: string
+            Name of the model used to run the inference when the scheduler
+            wakes up
+            
+        execution_summaries: list of dict
+            A list of all inference execution results. Each execution is stored
+            as a dictionary.
+
+    METHODS
+    =======
+        set_parameters():
+            Sets all the parameters necessary to manage this scheduler object
+        
+        create():
+            Creates a new scheduler
+            
+        start():
+            Start an existing scheduler
+            
+        stop():
+            Stop an existing scheduler
+            
+        delete():
+            Detele a stopped scheduler
+            
+        get_status():
+            Returns the status of the scheduler
+            
+        list_inference_executions():
+            Returns all the results from the inference executed by the scheduler
+            
+        get_predictions():
+            Return the predictions generated by the executed inference
+    """
     def __init__(self, scheduler_name, model_name):
+        """
+        Constructs all the necessary attributes for a scheduler object.
+        
+        PARAMS
+        ======
+            scheduler_name: string
+                The name of the scheduler to be created or managed
+                
+            model_name: string
+                The name of the model to schedule inference for
+        """
         self.scheduler_name = scheduler_name
         self.model_name = model_name
         self.lookout_client = get_client()
