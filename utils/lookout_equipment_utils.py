@@ -444,8 +444,8 @@ def plot_timeseries(timeseries_df, tag_name,
     return fig, ax
 
 class LookoutEquipmentAnalysis:
-    def __init__(self, model_name, tags_df):
-        self.lookout_client = get_client()
+    def __init__(self, model_name, tags_df, region_name):
+        self.lookout_client = get_client(region_name)
         self.model_name = model_name
         self.predicted_ranges = None
         self.labelled_ranges = None
@@ -621,10 +621,10 @@ class LookoutEquipmentAnalysis:
         return significant_signals_df
     
 class LookoutEquipmentScheduler:
-    def __init__(self, scheduler_name, model_name):
+    def __init__(self, scheduler_name, model_name, region_name):
         self.scheduler_name = scheduler_name
         self.model_name = model_name
-        self.lookout_client = get_client()
+        self.lookout_client = get_client(region_name)
         
         self.input_bucket = None
         self.input_prefix = None
